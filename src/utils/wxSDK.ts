@@ -1,26 +1,5 @@
-import {
-  Observable,
-  Subscriber,
-  bindCallback,
-  connectable,
-  EMPTY,
-  from,
-  zip,
-  of,
-  iif,
-  throwError,
-  concat,
-} from "rxjs";
-import {
-  concatAll,
-  concatMap,
-  filter,
-  map,
-  switchMap,
-  take,
-  tap,
-  toArray,
-} from "rxjs/operators";
+import { Observable, Subscriber, from, iif, throwError } from "rxjs";
+import { concatMap, filter, switchMap, concatWith } from "rxjs/operators";
 
 declare var wx: any;
 
@@ -30,7 +9,7 @@ declare var wx: any;
 const jsApiList = [
   "getLocalImgData",
   "chooseImage",
-  'uploadImage',
+  "uploadImage",
   "openLocation",
   "getLocation",
   "startRecord",
@@ -41,6 +20,11 @@ const jsApiList = [
   "stopVoice",
   "onVoicePlayEnd",
 ];
+
+/**
+ * 成功正则表达式
+ */
+const okRegx = /ok$/;
 
 /**
  * 微信JSSDK服务
@@ -83,11 +67,11 @@ export class WxSDKService {
     // TEST
     wx.config({
       beta: true, // 必须这么写，否则wx.invoke调用形式的jsapi会有问题
-      debug: false, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
-      appId: "", // 必填，企业微信的corpID
-      timestamp: "1624097744153", // 必填，生成签名的时间戳
+      debug: true, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
+      appId: "ww1dc4285449f9bd3e", // 必填，企业微信的corpID
+      timestamp: "1624265079904", // 必填，生成签名的时间戳
       nonceStr: "xmgjyh", // 必填，生成签名的随机串
-      signature: "c55ece02e82ba07cc1f30b961451e5bb44b36e20", // 必填，签名，见 附录-JS-SDK使用权限签名算法
+      signature: "29d64a4f1eb5166df724cabb51da6edde741c501", // 必填，签名，见 附录-JS-SDK使用权限签名算法
       jsApiList, // 必填，需要使用的JS接口列表，凡是要调用的接口都需要传进来
     });
 
@@ -96,7 +80,7 @@ export class WxSDKService {
       wx.ready(() => resolve(true));
       wx.error((res: any) => {
         reject(false);
-        console.error(res.errMsg,'onError')
+        console.error(res.errMsg, "onError");
         throw res.errMsg;
       });
     });
@@ -107,12 +91,6 @@ export class WxSDKService {
       this.ready = this.useJssdk();
     }
     return this.ready;
-  }
-
-  private resOk(res: any): boolean {
-    const errMsg: string = res.errMsg;
-    if (!errMsg) return false;
-    return /ok$/.test(errMsg);
   }
 
   private onCatch(subscriber: Subscriber<any>) {
@@ -140,7 +118,7 @@ export class WxSDKService {
         count,
         sizeType: ["original"],
         success: ({ errMsg, localIds }) => {
-          errMsg && /ok$/.test(errMsg)
+          errMsg && okRegx.test(errMsg)
             ? subscriber.next(localIds)
             : subscriber.error(errMsg);
           //
@@ -155,7 +133,7 @@ export class WxSDKService {
         wx.getLocalImgData({
           localId,
           success: ({ errMsg, localData }) => {
-            errMsg && /ok$/.test(errMsg)
+            errMsg && okRegx.test(errMsg)
               ? subscriber.next({
                   localId,
                   data: localData,
@@ -186,7 +164,7 @@ export class WxSDKService {
         localId,
         isShowProgressTips: 0,
         success: ({ errMsg, serverId }) => {
-          errMsg && /ok$/.test(errMsg)
+          errMsg && okRegx.test(errMsg)
             ? subscriber.next({
                 localId,
                 serverId,
@@ -221,12 +199,11 @@ export class WxSDKService {
     const _openLocation = new Observable<void>((subscriber) => {
       wx.openLocation({
         ...location,
-        success: (res) => {
-          if (this.resOk(res)) {
-            subscriber.next();
+        success: ({ errMsg }) => {
+          if (okRegx.test(errMsg)) {
             subscriber.complete();
           } else {
-            subscriber.error(res.errMsg);
+            subscriber.error(errMsg);
           }
         },
       });
@@ -255,15 +232,15 @@ export class WxSDKService {
     const _getLocation = new Observable<Location>((subscriber) => {
       wx.getLocation({
         type: "gcj02",
-        success: (res) => {
-          if (this.resOk(res)) {
+        success: ({ errMsg, longitude, latitude }) => {
+          if (okRegx.test(errMsg)) {
             subscriber.next({
-              longitude: res.longitude,
-              latitude: res.latitude,
+              longitude,
+              latitude,
             });
             subscriber.complete();
           } else {
-            subscriber.error(res.errMsg);
+            subscriber.error(errMsg);
           }
         },
       });
@@ -280,8 +257,7 @@ export class WxSDKService {
   // 录音对象，在整个录音过程存在，手动停止后结束
   private recorder: Subscriber<string> | null = null;
   /**
-   * 开始持续录音, 每一分钟会next一个值，需要自己存储,直到超过设定时间
-   * @param durtion 持续时间，默认120分钟
+   * 开始持续录音, 每一分钟会next一个值，需要自己存储,直到超过设定时间 120分钟
    * @returns
    * @example
    * const recordIds = [];
@@ -292,50 +268,49 @@ export class WxSDKService {
    *		// upload this record
    *	},
    *	complete: () => {
-   *		// upload
+   *		// 录音最大限制次数已到
    *	},
    * });
    */
-  public startRecordes(durtion = 120) {
+  public startRecord() {
+    this.recorder = null;
     let count = 0;
 
-    const recording = () => {
+    const start = () => {
+      count++;
       wx.startRecord();
-      count += 1;
     };
 
-    return new Observable<string>((subscriber) => {
-      this.onReady()
-        .then(() => {
-          // 全局存放，录音控制器
-          this.recorder = subscriber;
-
-          // 开始录音
-          recording();
-          wx.onVoiceRecordEnd({
-            complete: (res) => {
-              if (this.resOk(res) && this.recorder) {
-                this.recorder.next(res.localId);
-                // 如果录音持续时间小于设定时间，继续录音
-                if (count < durtion) {
-                  wx.startRecord();
-                } else {
-                  // 超过设定最大时间，结束
-                  this.recorder.complete();
-                  this.recorder = null;
-                }
-              } else {
-                subscriber.error(res.errMsg);
-                if (this.recorder) {
-                  this.recorder.complete();
-                  this.recorder = null;
-                }
-              }
-            },
-          });
-        })
-        .catch(() => this.onCatch(subscriber));
+    const createObverable$ = new Observable<string>((subscriber) => {
+      this.recorder = subscriber;
+      // 先执行一次
+      start();
+      // 监听事件
+      wx.onVoiceRecordEnd({
+        complete: ({ errMsg, localId }) => {
+          if (okRegx.test(errMsg)) {
+            subscriber.next(localId);
+            console.log(count);
+            if (count < 120 && this.recorder) {
+              start();
+            } else {
+              subscriber.complete();
+            }
+          } else {
+            subscriber.error(errMsg);
+          }
+        },
+      });
     });
+
+    return iif(
+      () => !!this.recorder,
+      throwError(() => new Error("正在录音中")),
+      from(this.onReady())
+    ).pipe(
+      filter((v) => !!v),
+      concatWith(createObverable$)
+    );
   }
 
   /**
@@ -344,29 +319,29 @@ export class WxSDKService {
    * @example
    * const service = new WxSDKService();
    * service.stopRecord().subscribe({
-   * 		next: () => {
-   * 			// submit form data
-   * 		},
    * 		error: (msg) => {
    * 			// notify error msg
    * 		},
+   *    complete:() =>{
+   *      // do sometings
+   *    }
    * });
    */
   public stopRecord() {
     const stop$ = new Observable<void>((subscriber) => {
       wx.stopRecord({
-        success: (res) => {
+        success: ({ errMsg, localId }) => {
           if (!this.recorder) {
             subscriber.error("录音控制器错误");
             return;
           }
-          if (this.resOk(res)) {
+          if (okRegx.test(errMsg)) {
             // 录音数据发送给start 时间的消息源
-            this.recorder.next(res.localId);
+            this.recorder.next(localId);
             // 告诉本次操作正常结束
-            subscriber.next();
+            subscriber.complete();
           } else {
-            subscriber.error(res.errMsg);
+            subscriber.error(errMsg);
           }
           // 不管是否正常结束，录音对象都要置空
           this.recorder.complete();
@@ -415,21 +390,93 @@ export class WxSDKService {
    *	});
    */
   public uploadRecord(localId: string) {
-    return new Observable<UploadInfo>((subscriber) => {
+    const upload$ = new Observable<UploadInfo>((subscriber) => {
       wx.uploadVoice({
         localId, // 需要上传的音频的本地ID，由stopRecord接口获得
-        success: function (res) {
-          if (this.resOk(res)) {
+        isShowProgressTips: 0, // 不显示上传进度，没用
+        success: ({ errMsg, serverId }) => {
+          if (okRegx.test(errMsg)) {
             subscriber.next({
               localId,
-              serverId: res.serverId,
+              serverId: serverId,
             });
           } else {
-            subscriber.error(res.errMsg);
+            subscriber.error(errMsg);
           }
         },
       });
     });
+
+    return from(this.onReady()).pipe(
+      filter((v) => !!v),
+      switchMap(() => upload$)
+    );
+  }
+
+  /**
+   * 播放录音
+   * 如果需要连续播放，可以在complete回调里面调用一次播放
+   * @param recordId
+   * @returns
+   */
+  public playRecord(recordId: string) {
+    const play$ = new Observable<string>((subscriber) => {
+      wx.playVoice({
+        localId: recordId, // 需要播放的音频的本地ID，由stopRecord接口获得
+        success: ({ errMsg }) => {
+          if (okRegx.test(errMsg)) {
+            // 告诉外部，已经开始播放。可以设置状态了
+            subscriber.next(recordId);
+          } else {
+            subscriber.error(errMsg);
+          }
+        },
+      });
+      wx.onVoicePlayEnd({
+        success: ({ errMsg, localId }) => {
+          if (okRegx.test(errMsg)) {
+            // 告诉外部，播放完毕了，可以下一次了
+            localId === recordId
+              ? subscriber.complete()
+              : subscriber.error("stoped:" + localId);
+          } else {
+            subscriber.error(errMsg);
+          }
+        },
+      });
+    });
+
+    return from(this.onReady()).pipe(
+      filter((v) => !!v),
+      switchMap(() => play$)
+    );
+  }
+
+  /**
+   * 停止播放
+   * 停止播放成功，会返回停止的录音ID
+   * @param recoredId
+   * @returns
+   */
+  public playStop(recoredId: string) {
+    const stop$ = new Observable<void>((subscriber) => {
+      wx.stopVoice({
+        localId: recoredId, // 需要停止的音频的本地ID，由stopRecord接口获得
+        success: ({ errMsg, localId }) => {
+          if (okRegx.test(errMsg)) {
+            subscriber.next(localId);
+          } else {
+            subscriber.error(errMsg);
+          }
+          subscriber.complete();
+        },
+      });
+    });
+
+    return from(this.onReady()).pipe(
+      filter((v) => !!v),
+      switchMap(() => stop$)
+    );
   }
 
   //#endregion
@@ -546,4 +593,8 @@ export interface UploadInfo {
    * 在微信服务器的mediaId
    */
   serverId: string;
+}
+
+export interface RecordInfo extends UploadInfo {
+  status: UploadStatus;
 }

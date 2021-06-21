@@ -1,16 +1,19 @@
 <template>
   <h1 class="title">微信SDK测试</h1>
-  <UploadImage />
+  <!-- <UploadImage /> -->
+  <UploadRecord />
 </template>
 
 <script lang="ts">
 import { defineComponent } from "vue";
 import UploadImage from "./components/UploadImage.vue";
+import UploadRecord from "./components/UploadRecord.vue";
 
 export default defineComponent({
   name: "App",
   components: {
     UploadImage,
+    UploadRecord,
   },
 });
 </script>
