@@ -13,7 +13,7 @@
           <van-icon
             v-if="playStatus && currentPlayId === item.localId"
             name="stop-circle-o"
-            @click="stopClick(item)"
+            @click="stopClick(item.localId)"
             :size="22"
           />
           <!-- 播放按钮 -->
@@ -158,6 +158,7 @@ export default defineComponent({
           },
           complete: () => {
             // 查找下一条录音数据
+            console.log("over");
             const index = recordList.value.findIndex((x) => x.localId === id);
             const nextItem = recordList.value[index + 1];
             // 没有下一条。则当前录音列表播放完毕
