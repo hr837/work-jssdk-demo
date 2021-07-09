@@ -1,4 +1,4 @@
-import { Observable, Subscriber, from, iif, throwError } from "rxjs";
+import { Observable, Subscriber, from, iif, throwError, of } from "rxjs";
 import {
   concatMap,
   filter,
@@ -79,9 +79,9 @@ export class WxSDKService {
       beta: true, // 必须这么写，否则wx.invoke调用形式的jsapi会有问题
       debug: false, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
       appId: "ww1dc4285449f9bd3e", // 必填，企业微信的corpID
-      timestamp: "1625809570108", // 必填，生成签名的时间戳
+      timestamp: "1625815305301", // 必填，生成签名的时间戳
       nonceStr: "xmgjyh", // 必填，生成签名的随机串
-      signature: "2af6f20597eef04b73c598a5e21a346eddc87fa5", // 必填，签名，见 附录-JS-SDK使用权限签名算法
+      signature: "66cc66bbd2eb2339637510569b93e634962a3eb1", // 必填，签名，见 附录-JS-SDK使用权限签名算法
       jsApiList, // 必填，需要使用的JS接口列表，凡是要调用的接口都需要传进来
     });
 
@@ -105,6 +105,20 @@ export class WxSDKService {
 
   private onCatch(subscriber: Subscriber<any>) {
     return subscriber.error(this.SDK_ERROR);
+  }
+
+  /**
+   * 用户可能会做刷新操作，这时候应该处理有可能在应用主体正在执行的API
+   */
+  public initialApi() {
+    this.onReady().then((v) => {
+      if (!v) return;
+      // 应该停止录音
+      wx.stopRecord();
+
+      // 应该停止播放录音
+      wx.stopVoice();
+    });
   }
 
   /**
@@ -330,7 +344,9 @@ export class WxSDKService {
       from(this.onReady())
     ).pipe(
       filter((v) => !!v),
-      switchMap(() => $start),
+      switchMap(() =>
+        $start.pipe(timeout({ each: 1000, with: () => of(true) }))
+      ),
       timeout({
         each: durtion * 1000,
         with: () => $stop,

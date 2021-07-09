@@ -27,7 +27,7 @@
 
 
 <script lang="ts">
-import { ref, defineComponent, computed } from "vue";
+import { ref, defineComponent, computed, onMounted } from "vue";
 import { Uploader, Cell, Button, Toast, CellGroup, Loading, Icon } from "vant";
 import { RecordInfo, UploadStatus, WxSDKService } from "../utils/wxSDK";
 import { Subscription } from "rxjs";
@@ -189,6 +189,8 @@ export default defineComponent({
         },
       });
     }
+
+    onMounted(() => service.initialApi());
 
     return {
       // data
