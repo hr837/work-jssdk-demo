@@ -1,5 +1,15 @@
 import { Observable, Subscriber, from, iif, throwError } from "rxjs";
-import { concatMap, filter, switchMap, concatWith } from "rxjs/operators";
+import {
+  concatMap,
+  filter,
+  switchMap,
+  concatWith,
+  timeout,
+  take,
+  repeat,
+  finalize,
+  tap,
+} from "rxjs/operators";
 
 declare var wx: any;
 
@@ -69,9 +79,9 @@ export class WxSDKService {
       beta: true, // 必须这么写，否则wx.invoke调用形式的jsapi会有问题
       debug: false, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
       appId: "ww1dc4285449f9bd3e", // 必填，企业微信的corpID
-      timestamp: "1625723655811", // 必填，生成签名的时间戳
+      timestamp: "1625809570108", // 必填，生成签名的时间戳
       nonceStr: "xmgjyh", // 必填，生成签名的随机串
-      signature: "a76bbb594b40d88ff4651493891f1f5476516e8c", // 必填，签名，见 附录-JS-SDK使用权限签名算法
+      signature: "2af6f20597eef04b73c598a5e21a346eddc87fa5", // 必填，签名，见 附录-JS-SDK使用权限签名算法
       jsApiList, // 必填，需要使用的JS接口列表，凡是要调用的接口都需要传进来
     });
 
@@ -255,48 +265,60 @@ export class WxSDKService {
   //#region 录音
 
   // 录音对象，在整个录音过程存在，手动停止后结束
-  private recorder: Subscriber<string> | null = null;
+  private recorder = false;
   /**
-   * 开始持续录音, 每一分钟会next一个值，需要自己存储,直到超过设定时间 120分钟
+   * 开始持续录音, 默认每59秒一个录音文件，录音10次。
+   * @param durtion 持续时间，单位：秒
+   * @param times 录音多少次后停止
    * @returns
    * @example
    * const recordIds = [];
+   * let recordFlag = false;
    * const service = new WxSDKService();
-   * service.startRecordes(30).subscribe({
-   *	next: (id) => {
-   *		recordIds.push(id);
-   *		// upload this record
+   * service.startRecordes().subscribe({
+   *	next: (value) => {
+   *    if(typeof value === 'boolean'){
+   *      recordFlag = true
+   *    }else{
+   *      recordIds.push(id);
+   *  		// upload this record
+   *    }
    *	},
    *	complete: () => {
    *		// 录音最大限制次数已到
+   *    recordFlag = false
    *	},
    * });
    */
-  public startRecord() {
-    this.recorder = null;
-    let count = 0;
+  public startRecord(durtion = 59, times = 10) {
+    if (durtion > 59) {
+      throw new Error("每一段录音时间不能超过59s,否则IOS会弹窗提醒");
+    }
+    if (times > 10) {
+      console.log("时间太长应防止黑屏或被系统杀掉进程");
+    }
 
-    const start = () => {
-      count++;
-      wx.startRecord();
-    };
+    const $start = new Observable<boolean>((subscribe) => {
+      wx.startRecord({
+        complete: ({ errMsg }) => {
+          if (okRegx.test(errMsg)) {
+            subscribe.next(true);
+          } else {
+            subscribe.error(errMsg);
+            subscribe.complete();
+          }
+        },
+      });
+    });
 
-    const createObverable$ = new Observable<string>((subscriber) => {
-      this.recorder = subscriber;
-      // 先执行一次
-      start();
-      // 监听事件
-      wx.onVoiceRecordEnd({
+    const $stop = new Observable<string>((subscribe) => {
+      wx.stopRecord({
         complete: ({ errMsg, localId }) => {
           if (okRegx.test(errMsg)) {
-            subscriber.next(localId);
-            if (count < 120 && this.recorder) {
-              start();
-            } else {
-              subscriber.complete();
-            }
+            subscribe.next(localId);
           } else {
-            subscriber.error(errMsg);
+            subscribe.error(errMsg);
+            subscribe.complete();
           }
         },
       });
@@ -308,7 +330,14 @@ export class WxSDKService {
       from(this.onReady())
     ).pipe(
       filter((v) => !!v),
-      concatWith(createObverable$)
+      switchMap(() => $start),
+      timeout({
+        each: durtion * 1000,
+        with: () => $stop,
+      }),
+      take(2),
+      repeat(times),
+      filter((v, index) => typeof v === "string" || index === 0)
     );
   }
 
@@ -316,44 +345,44 @@ export class WxSDKService {
    * 录音停止
    * @returns Observable<void>
    * @example
-   * const service = new WxSDKService();
-   * service.stopRecord().subscribe({
-   * 		error: (msg) => {
-   * 			// notify error msg
-   * 		},
-   *    complete:() =>{
-   *      // do sometings
-   *    }
-   * });
+   *   const service = new WxSDKService();
+   *   // id通过startRecordes的订阅获取
+   *   // ...
+   *   let startRecordSubscribtion = service.startRecord().subscribe();
+   *   const list: string[] = [];
+   *   let startRecordFlag = true;
+   *   // ...
+   *
+   *   startRecordSubscribtion.unsubscribe();
+   *   service.stopRecord().subscribe({
+   *     next: (localId) => {
+   *       list.push(localId);
+   *     },
+   *     error: (err) => {
+   *       console.log(err);
+   *     },
+   *     complete: () => {
+   *       startRecordFlag = false;
+   *     },
+   *   });
    */
   public stopRecord() {
-    const stop$ = new Observable<void>((subscriber) => {
+    const stop$ = new Observable<string>((subscriber) => {
       wx.stopRecord({
         success: ({ errMsg, localId }) => {
-          if (!this.recorder) {
-            subscriber.error("录音控制器错误");
-            return;
-          }
           if (okRegx.test(errMsg)) {
             // 录音数据发送给start 时间的消息源
-            this.recorder.next(localId);
+            subscriber.next(localId);
             // 告诉本次操作正常结束
-            subscriber.complete();
           } else {
             subscriber.error(errMsg);
           }
-          // 不管是否正常结束，录音对象都要置空
-          this.recorder.complete();
-          this.recorder = null;
+          subscriber.complete();
         },
       });
     });
 
-    return iif(
-      () => !!this.recorder,
-      from(this.onReady()),
-      throwError(() => new Error("还未开始录音"))
-    ).pipe(
+    return from(this.onReady()).pipe(
       filter((v) => !!v), // 总之必须ready之后才可以执行wx的api
       switchMap(() => stop$)
     );
@@ -494,25 +523,22 @@ export class WxSDKService {
   private demoFun() {
     const service = new WxSDKService();
     // id通过startRecordes的订阅获取
-    const id = "0001";
-    const recordList = [
-      {
-        localId: "0001",
-        serverId: "",
-        uploaded: false,
-      },
-    ];
+    // ...
+    let startRecordSubscribtion = service.startRecord().subscribe();
+    const list: string[] = [];
+    let startRecordFlag = true;
+    // ...
 
-    service.uploadRecord(id).subscribe({
-      next: ({ localId, serverId }) => {
-        const item = recordList.find((x) => x.localId === localId);
-        if (!item) return;
-        item.serverId = serverId;
-        item.uploaded = true;
-        // need computed item uploaded status to render successful status
+    startRecordSubscribtion.unsubscribe();
+    service.stopRecord().subscribe({
+      next: (localId) => {
+        list.push(localId);
       },
-      error: (msg) => {
-        // notify error msg
+      error: (err) => {
+        console.log(err);
+      },
+      complete: () => {
+        startRecordFlag = false;
       },
     });
   }

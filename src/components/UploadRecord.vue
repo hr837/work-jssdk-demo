@@ -64,9 +64,11 @@ export default defineComponent({
 
     const showList = computed(() => recordList.value.length > 0);
 
+    let recorerSubscribtion: Subscription | null = null;
+
     // 开始录音
     function startRecordClick() {
-      service.startRecord().subscribe({
+      recorerSubscribtion = service.startRecord().subscribe({
         next: (value) => {
           if (typeof value === "boolean") {
             startFlag.value = true;
@@ -75,33 +77,31 @@ export default defineComponent({
             console.log(value, "next..");
             recordList.value.push({
               localId: value,
-              status: "uploading",
+              status: "done",
               serverId: "",
             });
-            uploadItem(value);
+            // uploadItem(value);
           }
         },
-        error: (err) => {
-          console.log(err);
-          if (typeof err === "string") {
-            Toast(err);
-          } else {
-            Toast(err.message || "录音失败");
-          }
+        error: Toast,
+        complete: () => {
+          startFlag.value = false;
         },
       });
     }
 
     // 停止录音
     function stopRecordClick() {
+      recorerSubscribtion?.unsubscribe();
       service.stopRecord().subscribe({
-        error: (err) => {
-          if (typeof err === "string") {
-            Toast(err);
-          } else {
-            Toast(err.message || "停止失败");
-          }
+        next: (localId) => {
+          recordList.value.push({
+            localId,
+            status: "done",
+            serverId: "",
+          });
         },
+        error: Toast,
         complete: () => {
           startFlag.value = false;
           // emit list to parent
