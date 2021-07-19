@@ -1,4 +1,13 @@
-import { Observable, Subscriber, from, iif, throwError, of } from "rxjs";
+import {
+  Observable,
+  Subscriber,
+  from,
+  iif,
+  throwError,
+  of,
+  race,
+  interval,
+} from "rxjs";
 import {
   concatMap,
   filter,
@@ -9,6 +18,11 @@ import {
   repeat,
   finalize,
   tap,
+  raceWith,
+  delay,
+  switchMapTo,
+  mergeWith,
+  concatMapTo,
 } from "rxjs/operators";
 
 declare var wx: any;
@@ -79,9 +93,9 @@ export class WxSDKService {
       beta: true, // 必须这么写，否则wx.invoke调用形式的jsapi会有问题
       debug: false, // 开启调试模式,调用的所有api的返回值会在客户端alert出来，若要查看传入的参数，可以在pc端打开，参数信息会通过log打出，仅在pc端时才会打印。
       appId: "ww1dc4285449f9bd3e", // 必填，企业微信的corpID
-      timestamp: "1625815305301", // 必填，生成签名的时间戳
+      timestamp: "1626667851506", // 必填，生成签名的时间戳
       nonceStr: "xmgjyh", // 必填，生成签名的随机串
-      signature: "66cc66bbd2eb2339637510569b93e634962a3eb1", // 必填，签名，见 附录-JS-SDK使用权限签名算法
+      signature: "6c39230cb61dc1bc31020f4b226cf41199842b68", // 必填，签名，见 附录-JS-SDK使用权限签名算法
       jsApiList, // 必填，需要使用的JS接口列表，凡是要调用的接口都需要传进来
     });
 
@@ -304,7 +318,7 @@ export class WxSDKService {
    *	},
    * });
    */
-  public startRecord(durtion = 59, times = 10) {
+  public startRecord(durtion = 10, times = 10) {
     if (durtion > 59) {
       throw new Error("每一段录音时间不能超过59s,否则IOS会弹窗提醒");
     }
@@ -312,9 +326,16 @@ export class WxSDKService {
       console.log("时间太长应防止黑屏或被系统杀掉进程");
     }
 
+    // 默认50ms成功
+    const $staredDefault = of(true).pipe(
+      delay(50),
+      tap(() => console.log("录音开始无回调，自动切换为true"))
+    );
+    // 开始录音
     const $start = new Observable<boolean>((subscribe) => {
       wx.startRecord({
         complete: ({ errMsg }) => {
+          console.log("本次录音开始...");
           if (okRegx.test(errMsg)) {
             subscribe.next(true);
           } else {
@@ -322,12 +343,13 @@ export class WxSDKService {
             subscribe.complete();
           }
         },
-      });
-    });
+      }); // 200ms后无响应，则切换到true
+    }).pipe(raceWith($staredDefault));
 
     const $stop = new Observable<string>((subscribe) => {
       wx.stopRecord({
         complete: ({ errMsg, localId }) => {
+          console.log("本次录音结束...");
           if (okRegx.test(errMsg)) {
             subscribe.next(localId);
           } else {
@@ -338,19 +360,21 @@ export class WxSDKService {
       });
     });
 
+    // 直到停止时间到，发送stop得到数据
+    const $utillStop = interval(durtion * 1000).pipe(
+      take(1),
+      switchMapTo($stop)
+    );
+
     return iif(
       () => !!this.recorder,
       throwError(() => new Error("正在录音中")),
       from(this.onReady())
     ).pipe(
       filter((v) => !!v),
-      switchMap(() =>
-        $start.pipe(timeout({ each: 1000, with: () => of(true) }))
-      ),
-      timeout({
-        each: durtion * 1000,
-        with: () => $stop,
-      }),
+      switchMapTo($start), // 切换到开始
+      take(1),
+      concatWith($utillStop),
       take(2),
       repeat(times),
       filter((v, index) => typeof v === "string" || index === 0)
@@ -400,7 +424,7 @@ export class WxSDKService {
 
     return from(this.onReady()).pipe(
       filter((v) => !!v), // 总之必须ready之后才可以执行wx的api
-      switchMap(() => stop$)
+      switchMapTo(stop$)
     );
   }
 

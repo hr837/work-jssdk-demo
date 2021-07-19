@@ -95,6 +95,7 @@ export default defineComponent({
       recorerSubscribtion?.unsubscribe();
       service.stopRecord().subscribe({
         next: (localId) => {
+          console.log(localId, "stoped");
           recordList.value.push({
             localId,
             status: "done",
